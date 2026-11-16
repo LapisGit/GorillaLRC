@@ -1,9 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 
 OUT_DIR="${1:-$HOME/.cache/GorillaLRC}"
-OUT="$OUT_DIR/media.txt"
-TMP="$OUT.tmp"
-PIDFILE="${OUT%.txt}.pid"
+PIDFILE="$OUT_DIR/media.pid"
+PORT="${2:?missing stream port}"
 
 mkdir -p "$OUT_DIR"
 
@@ -12,24 +11,31 @@ if [ -f "$PIDFILE" ]; then
 fi
 echo $$ > "$PIDFILE"
 
-BIN=""
+PLAYERCTL=()
 for c in playerctl /run/host/usr/bin/playerctl; do
     if command -v "$c" >/dev/null 2>&1; then BIN="$c"; break; fi
 done
 
 if [ -z "$BIN" ]; then
-    echo "playerctl-missing" > "$OUT"
+    while ! exec 3<>"/dev/tcp/127.0.0.1/$PORT"; do sleep 1; done
+    printf 'playerctl-missing\n\n' >&3
     exit 1
 fi
 
-if ! "$BIN" --version >/dev/null 2>&1; then
-    BIN="/run/host/usr/lib/ld-linux-x86-64.so.2 --library-path /run/host/usr/lib64:/run/host/usr/lib /run/host/usr/bin/playerctl"
+PLAYERCTL=("$BIN")
+if ! "${PLAYERCTL[@]}" --version >/dev/null 2>&1; then
+    PLAYERCTL=(/run/host/usr/lib/ld-linux-x86-64.so.2 --library-path /run/host/usr/lib64:/run/host/usr/lib /run/host/usr/bin/playerctl)
 fi
 
 FORMAT='{{playerInstance}}|{{status}}|{{title}}|{{artist}}|{{mpris:length}}|{{position}}'
 
+while ! exec 3<>"/dev/tcp/127.0.0.1/$PORT"; do sleep 1; done
+
 while :; do
-    $BIN metadata --all-players --format "$FORMAT" > "$TMP" 2>/dev/null || : > "$TMP"
-    mv -f "$TMP" "$OUT"
+    snapshot=$("${PLAYERCTL[@]}" metadata --all-players --format "$FORMAT" 2>/dev/null || true)
+    if ! printf '%s\n\n' "$snapshot" >&3; then
+        exec 3>&-
+        while ! exec 3<>"/dev/tcp/127.0.0.1/$PORT"; do sleep 1; done
+    fi
     sleep 0.5
 done
